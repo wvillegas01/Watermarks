@@ -1,0 +1,387 @@
+import time
+import psutil
+import os
+import cv2
+import tkinter as tk
+from tkinter import ttk
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+from tkinter.filedialog import askopenfilename, asksaveasfilename
+from skimage.metrics import mean_squared_error
+from PIL import ImageTk
+
+def watermark_spatial(image_path):
+    # Load the image and get its size
+    img = Image.open(image_path)
+    width, height = img.size
+
+    # Create a copy of the image
+    watermarked_img = img.copy()
+
+    # Define the watermark text and font properties
+    text = "Watermark"
+    font = ImageFont.load_default()  # Use the system's default font
+    text_width, text_height = font.getbbox(text)[:2]
+
+    # Calculate the position of the watermark in the bottom right corner
+    watermark_pos = (width - text_width - 100, height - text_height - 20)
+
+    # Create an ImageDraw object to draw the watermark on the image
+    draw = ImageDraw.Draw(watermarked_img)
+
+    # Draw the watermark text on the image
+    draw.text(watermark_pos, text, font=font, fill=(255, 0, 255))  # Fully opaque white fill
+
+    return watermarked_img
+def watermark_transform(image_path):
+    # Load the image and convert it to grayscale
+    img = Image.open(image_path).convert("L")
+
+    # Convert the image to a numpy array
+    img_array = np.array(img)
+
+    # Apply the Fourier Transform to the image
+    img_fft = np.fft.fftshift(np.fft.fft2(img_array))
+
+    # Get the dimensions of the image
+    width, height = img.size
+
+    # Create a watermark mask in black color
+    watermark = np.zeros_like(img_array)
+    watermark_width = int(width / 2)  # Watermark width (half of the image)
+    watermark_height = int(height / 2)  # Watermark height (half of the image)
+    watermark_position = ((width - watermark_width) // 2, (height - watermark_height) // 2)  # Centered position
+    watermark[watermark_position[1]:watermark_position[1] + watermark_height,
+              watermark_position[0]:watermark_position[0] + watermark_width] = 255
+
+    # Blend the watermark with the Fourier Transform of the image
+    img_watermarked_fft = img_fft + watermark
+
+    # Get the resulting image by applying the Inverse Fourier Transform
+    img_watermarked = np.real(np.fft.ifft2(np.fft.ifftshift(img_watermarked_fft)))
+    img_watermarked = Image.fromarray(img_watermarked).convert("L")
+
+    return img_watermarked
+
+def watermark_pixel(image_path):
+    # Load the image
+    img = Image.open(image_path)
+
+    # Create a copy of the image
+    img_watermarked = img.copy()
+
+    # Load the watermark image
+    watermark = Image.open("C:/Users/William/Desktop/parpadeos/redes_sociales/watermark.png")  # Replace "watermark.png" with the location of your watermark image
+
+    # Resize the watermark to fit the image
+    watermark = watermark.resize(img.size)
+
+    # Set the opacity of the watermark
+    opacity = 0.5
+
+    # Convert the image and the watermark to RGBA mode
+    img_watermarked = img_watermarked.convert("RGBA")
+    watermark = watermark.convert("RGBA")
+
+    # Get the pixels of the image and the watermark as sequences of RGBA values
+    img_pixels = img_watermarked.getdata()
+    watermark_pixels = watermark.getdata()
+
+    # Apply the watermark to the image pixel by pixel
+    new_pixels = []
+    for img_pixel, watermark_pixel in zip(img_pixels, watermark_pixels):
+        # Get the RGBA values of the pixels
+        img_r, img_g, img_b, img_a = img_pixel
+        watermark_r, watermark_g, watermark_b, watermark_a = watermark_pixel
+
+        # Calculate the new RGBA value of the pixel with the watermark
+        new_r = int((1 - opacity) * img_r + opacity * watermark_r)
+        new_g = int((1 - opacity) * img_g + opacity * watermark_g)
+        new_b = int((1 - opacity) * img_b + opacity * watermark_b)
+        new_a = max(img_a, watermark_a)  # Use the maximum opacity value for the alpha channel
+
+        # Add the new pixel to the list of resulting pixels
+        new_pixel = (new_r, new_g, new_b, new_a)
+        new_pixels.append(new_pixel)
+
+    # Set the resulting pixels in the image
+    img_watermarked.putdata(new_pixels)
+
+    # Return the image with the watermark applied
+    return img_watermarked
+
+def generate_watermark_text(watermark_text, font_size, font_color, background_color, image_size):
+    # Create a blank image with the specified size
+    watermark_image = Image.new("RGBA", image_size, background_color)
+
+    # Create an ImageDraw object to draw on the image
+    draw = ImageDraw.Draw(watermark_image)
+
+    # Load the font and get the size of the text
+    font = ImageFont.load_default()
+    text_bbox = draw.textbbox((0, 0), watermark_text, font=font)
+    text_width = text_bbox[2] - text_bbox[0]
+    text_height = text_bbox[3] - text_bbox[1]
+
+    # Calculate the centered position of the text in the image
+    text_x = (image_size[0] - text_width) // 2
+    text_y = (image_size[1] - text_height) // 2
+
+    # Draw the text on the image
+    draw.text((text_x, text_y), watermark_text, font=font, fill=font_color)
+
+    return watermark_image
+
+def perform_attacks():
+    selected_attack = attack_var.get()
+    image_path = load_image()
+
+    if image_path:
+        # Load the original image
+        original_image = cv2.imread(image_path)
+
+        # Perform the selected attack
+        if selected_attack == "Remove Regions":
+            attacked_image = remove_regions(image_path)
+        elif selected_attack == "Compression":
+            attacked_image = compress_image(image_path)
+        elif selected_attack == "Filtering":
+            attacked_image = apply_filter(image_path)
+        else:
+            return
+
+        # Show the attacked image in a window
+        cv2.imshow("Attacked Image", attacked_image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+        # Save the attacked image
+        save_path = asksaveasfilename(defaultextension=".png")
+        if save_path:
+            cv2.imwrite(save_path, attacked_image)
+
+# Function to show the combobox when the button is clicked
+def show_attack_options():
+    attack_dropdown.grid()
+
+def remove_regions(image_path):
+    # Load the image
+    image = cv2.imread(image_path)
+
+    # Verify if the image was loaded correctly
+    if image is None:
+        print("Error loading the image:", image_path)
+        return None
+
+    # Make a copy of the original image to preserve the color
+    result_image = image.copy()
+
+    # Convert the image to grayscale
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Apply thresholding to obtain a mask of the regions to remove
+    _, threshold = cv2.threshold(gray_image, 200, 255, cv2.THRESH_BINARY_INV)
+
+    # Find the contours of the regions to remove
+    contours, _ = cv2.findContours(threshold, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Create a blank mask of the same size as the image
+    mask = np.zeros_like(gray_image)
+
+    # Draw the contours of the regions to remove on the mask
+    cv2.drawContours(mask, contours, -1, 255, thickness=cv2.FILLED)
+
+    # Apply the mask to the image to remove the regions
+    result_image = cv2.bitwise_and(result_image, result_image, mask=cv2.bitwise_not(mask))
+
+    return result_image
+
+
+def compress_image(image_path, quality=90):
+    # Load the image
+    image = Image.open(image_path)
+
+    # Verify if the image was loaded correctly
+    if image is None:
+        print("Error loading the image:", image_path)
+        return None
+
+    # Convert the image to RGB mode
+    image = image.convert("RGB")
+
+    # Compress the image with the specified quality
+    image.save("temp.jpg", optimize=True, quality=quality)
+
+    # Load the compressed image
+    modified_image = Image.open("temp.jpg")
+
+    # Close the compressed image
+    modified_image.close()
+
+    # Remove the temporary image file
+    os.remove("temp.jpg")
+
+    return modified_image
+
+def apply_filter(image_path, filter_type="blur", kernel_size=5):
+    # Load the image
+    image = cv2.imread(image_path)
+
+    # Verify if the image was loaded correctly
+    if image is None:
+        print("Error loading the image:", image_path)
+        return None
+
+    # Apply the specified filter to the image
+    if filter_type == "blur":
+        modified_image = cv2.blur(image, (kernel_size, kernel_size))
+    elif filter_type == "gaussian":
+        modified_image = cv2.GaussianBlur(image, (kernel_size, kernel_size), 0)
+    elif filter_type == "median":
+        modified_image = cv2.medianBlur(image, kernel_size)
+    elif filter_type == "bilateral":
+        modified_image = cv2.bilateralFilter(image, kernel_size, 75, 75)
+    else:
+        # Handle the case of an invalid filter type
+        print("Invalid filter type:", filter_type)
+        return None
+
+    return modified_image
+
+
+def load_image():
+    # Open a file dialog window for the user to select an image
+    filename = askopenfilename()
+
+    # Return the path of the selected image as a string
+    return str(filename)
+# Create the interface window
+window = tk.Tk()
+# Set the window size
+window.geometry("500x300")  # Change the size according to your preferences
+
+# Load the background image
+background_image = Image.open("C:/Users/William/Desktop/parpadeos/redes_sociales/fondo2.jpg")  # Replace "image_path.jpg" with the location of your background image
+background_photo = ImageTk.PhotoImage(background_image)
+
+# Create a Label widget to display the background image
+background_label = tk.Label(window, image=background_photo)
+background_label.place(x=0, y=0, relwidth=1, relheight=1)  # Adjust the widget size to cover the entire window
+
+# Add elements to the interface
+technique_label = tk.Label(window, text="Select watermark technique:", width=30, height=2)
+technique_label.grid(row=0, column=0)
+
+technique_options = ["Spatial Domain Embedding", "Frequency Domain Transform", "Pixel Modification Techniques"]
+technique_var = tk.StringVar(window)
+technique_dropdown = tk.OptionMenu(window, technique_var, *technique_options)
+technique_dropdown.grid(row=1, column=0, padx=10, pady=10)
+
+load_button = tk.Button(window, text="Load Image", command=load_image, width=15, height=2)
+load_button.grid(row=2, column=0, padx=10, pady=10)
+
+watermark_text_label = tk.Label(window, text="Watermark Text:")
+watermark_text_label.grid(row=3, column=0, padx=10, pady=10)
+
+watermark_text_entry = tk.Entry(window)
+watermark_text_entry.grid(row=4, column=0, padx=10, pady=10)
+
+def apply_watermark():
+    # Get the watermark technique selected by the user
+    selected_technique = technique_var.get()
+
+    # Load the selected image
+    image_path = load_image()
+
+    if image_path:
+        # Measure execution time
+        start_time = time.time()
+
+        # Start monitoring system resources
+        cpu_percent_start = psutil.cpu_percent()
+        memory_percent_start = psutil.virtual_memory().percent
+
+        # Apply watermark based on the selected technique
+        if selected_technique == "Spatial Domain Embedding":
+            watermarked_image = watermark_spatial(image_path)
+        elif selected_technique == "Frequency Domain Transform":
+            watermarked_image = watermark_transform(image_path)
+        elif selected_technique == "Pixel Modification Techniques":
+            watermarked_image = watermark_pixel(image_path)
+        else:
+            # Handle the case of an invalid technique
+            return
+
+        # Get the watermark text entered by the user
+        watermark_text = watermark_text_entry.get()
+
+        # Generate the watermark text image
+        watermark_image = generate_watermark_text(watermark_text, 20, (255, 0, 0), (255, 255, 255, 128), (500, 300))
+
+        # Paste the watermark on the main image
+        watermarked_image.paste(watermark_image, (0, 0), mask=watermark_image)
+        watermarked_image = watermarked_image.convert("RGB")
+        watermarked_image.save("watermarked_image.jpg")
+
+        # Show the resulting image with the watermark in the interface
+        watermarked_image = ImageTk.PhotoImage(watermarked_image)
+        image_label = tk.Label(window, image=watermarked_image)
+        image_label.grid(row=6, column=0, columnspan=3)
+
+        # Save the image with the watermark
+        save_path = asksaveasfilename(defaultextension=".png")
+        if save_path:
+            watermarked_image.save(save_path)
+
+        end_time = time.time()
+        execution_time = end_time - start_time
+
+        # Stop monitoring system resources
+        cpu_percent_end = psutil.cpu_percent()
+        memory_percent_end = psutil.virtual_memory().percent
+
+        print("Execution Time:", execution_time, "seconds")
+        print("CPU Usage at Start:", cpu_percent_start, "%")
+        print("CPU Usage at End:", cpu_percent_end, "%")
+        print("Memory Usage at Start:", memory_percent_start, "%")
+        print("Memory Usage at End:", memory_percent_end, "%")
+
+        # Load the original image without watermark
+        original_image = cv2.imread(image_path)
+
+        # Convert images to NumPy arrays
+        original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
+        watermarked_image = np.array(watermarked_image)
+
+        # Calculate the Mean Squared Error (MSE)
+        mse = mean_squared_error(original_image, watermarked_image)
+
+        # Print the Mean Squared Error (MSE)
+        print("Mean Squared Error (MSE):", mse)
+
+# Add a button to apply the watermark
+apply_button = tk.Button(window, text="Apply Watermark", command=apply_watermark, width=25, height=2)
+apply_button.grid(row=5, column=0, padx=10, pady=10)
+
+# Add a button to generate attacks
+attack_button = tk.Button(window, text="Generate Attack", command=show_attack_options, width=20, height=2)
+attack_button.grid(row=1, column=2, pady=10)
+
+# Add a combobox to select the type of attack
+attack_options = ["Remove Regions", "Compression", "Filtering"]
+attack_var = tk.StringVar(window)
+attack_dropdown = ttk.Combobox(window, textvariable=attack_var, values=attack_options, state="readonly")
+attack_dropdown.grid(row=2, column=2, padx=10, pady=10)
+
+# Hide the combobox at the beginning
+attack_dropdown.grid_remove()
+
+# Add a button to execute the selected attack from the attack combobox
+execute_button = tk.Button(window, text="Execute Attack", command=perform_attacks, width=20, height=2)
+execute_button.grid(row=4, column=2, pady=10)
+
+# Run the interface window
+window.mainloop()
+
+
+
